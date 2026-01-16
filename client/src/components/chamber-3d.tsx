@@ -93,6 +93,75 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointCli
   const minVal = Math.min(...values);
   const maxVal = Math.max(...values);
 
+  // Calculate layer-specific metrics
+  const layerMetrics = useMemo(() => {
+    if (!sliceData) return null;
+    const flatSlice = sliceData.flat();
+    const mean = flatSlice.reduce((a, b) => a + b, 0) / flatSlice.length;
+    const variance = flatSlice.reduce((sum, v) => sum + (v - mean) ** 2, 0) / flatSlice.length;
+    const layerUniformity = 100 - (Math.sqrt(variance) / mean) * 100;
+    
+    const centerValue = sliceData[Math.floor(sliceData.length / 2)][Math.floor(sliceData[0].length / 2)];
+    const edgeValues = [
+      sliceData[0][Math.floor(sliceData[0].length / 2)],
+      sliceData[sliceData.length - 1][Math.floor(sliceData[0].length / 2)],
+      sliceData[Math.floor(sliceData.length / 2)][0],
+      sliceData[Math.floor(sliceData.length / 2)][sliceData[0].length - 1]
+    ];
+    const avgEdge = edgeValues.reduce((a, b) => a + b, 0) / edgeValues.length;
+    const layerCenterEdgeRatio = centerValue / avgEdge;
+    
+    return {
+      uniformity: Number(layerUniformity.toFixed(1)),
+      centerEdgeRatio: Number(layerCenterEdgeRatio.toFixed(3)),
+      avgDensity: Number(mean.toFixed(4)),
+      maxDensity: Number(Math.max(...flatSlice).toFixed(4)),
+      minDensity: Number(Math.min(...flatSlice).toFixed(4)),
+    };
+  }, [sliceData]);
+
+  // Create Z-plane indicator mesh
+  const zPlaneData = useMemo(() => {
+    const halfX = xSize / 2;
+    const halfY = ySize / 2;
+    return {
+      type: "mesh3d",
+      x: [-halfX, halfX, halfX, -halfX],
+      y: [-halfY, -halfY, halfY, halfY],
+      z: [selectedZ, selectedZ, selectedZ, selectedZ],
+      i: [0],
+      j: [1],
+      k: [2],
+      facecolor: ["rgba(59, 130, 246, 0.3)"],
+      opacity: 0.4,
+      flatshading: true,
+      showscale: false,
+      hoverinfo: "skip",
+      name: `Z-Slice: Layer ${selectedZ}`,
+    };
+  }, [selectedZ, xSize, ySize]);
+
+  // Add second triangle for complete plane
+  const zPlaneData2 = useMemo(() => {
+    const halfX = xSize / 2;
+    const halfY = ySize / 2;
+    return {
+      type: "mesh3d",
+      x: [-halfX, halfX, -halfX],
+      y: [-halfY, halfY, halfY],
+      z: [selectedZ, selectedZ, selectedZ],
+      i: [0],
+      j: [1],
+      k: [2],
+      facecolor: ["rgba(59, 130, 246, 0.3)"],
+      opacity: 0.4,
+      flatshading: true,
+      showscale: false,
+      hoverinfo: "skip",
+      name: "",
+    };
+  }, [selectedZ, xSize, ySize]);
+
   const isoData = [
     {
       type: "isosurface",
@@ -127,6 +196,8 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointCli
         z: { show: false },
       },
     },
+    zPlaneData,
+    zPlaneData2,
   ] as unknown as Plotly.Data[];
 
   const layout: Partial<Plotly.Layout> = {
@@ -222,11 +293,23 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointCli
       </div>
 
       {sliceData && (
-        <div className="mt-4">
-          <h4 className="text-sm font-medium mb-2 flex items-center gap-2" data-testid="text-2d-slice-title">
-            <Target className="h-4 w-4" />
-            2D Slice at Height {selectedZ}
-          </h4>
+        <div className="mt-4 space-y-3">
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-medium flex items-center gap-2" data-testid="text-2d-slice-title">
+              <Target className="h-4 w-4" />
+              2D Slice at Height {selectedZ}
+            </h4>
+            {layerMetrics && (
+              <div className="flex items-center gap-2">
+                <Badge variant="outline" className="font-mono text-xs" data-testid="badge-layer-density">
+                  Avg: {layerMetrics.avgDensity}
+                </Badge>
+                <Badge variant="secondary" className="font-mono text-xs" data-testid="badge-layer-range">
+                  {layerMetrics.minDensity} - {layerMetrics.maxDensity}
+                </Badge>
+              </div>
+            )}
+          </div>
           <div 
             className="grid gap-0.5 rounded-lg overflow-hidden"
             style={{ 
@@ -268,6 +351,26 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointCli
               })
             )}
           </div>
+
+          {/* Layer-specific metrics that update with Z-slider */}
+          {layerMetrics && (
+            <div className="p-3 rounded-lg bg-primary/5 border border-primary/20" data-testid="layer-metrics-panel">
+              <p className="text-xs font-medium text-primary mb-2 flex items-center gap-1">
+                <Layers className="h-3 w-3" />
+                Layer {selectedZ} Metrics (Updates with slider)
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-0.5" data-testid="layer-metric-uniformity">
+                  <p className="text-xs text-muted-foreground">Layer Uniformity</p>
+                  <p className="font-mono font-bold text-lg text-primary">{layerMetrics.uniformity}%</p>
+                </div>
+                <div className="space-y-0.5" data-testid="layer-metric-center-edge">
+                  <p className="text-xs text-muted-foreground">Layer Center/Edge</p>
+                  <p className="font-mono font-bold text-lg text-primary">{layerMetrics.centerEdgeRatio}</p>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -436,49 +539,52 @@ export function Chamber3D({ distribution, isLoading }: Chamber3DProps) {
         )}
         
         {distribution && (
-          <div className="grid grid-cols-2 lg:grid-cols-3 gap-2 pt-2" data-testid="chamber-3d-metrics">
-            <MetricBadge
-              icon={Target}
-              label="Center/Edge Ratio"
-              value={distribution.centerEdgeRatio}
-              unit=""
-              testId="metric-center-edge-ratio"
-            />
-            <MetricBadge
-              icon={ArrowDownUp}
-              label="Top/Bottom Gradient"
-              value={distribution.topBottomGradient}
-              unit=""
-              testId="metric-top-bottom-gradient"
-            />
-            <MetricBadge
-              icon={Layers}
-              label="Vertical Uniformity"
-              value={distribution.verticalUniformity || 0}
-              unit="%"
-              testId="metric-vertical-uniformity"
-            />
-            <MetricBadge
-              icon={Waves}
-              label="Wall Loss Factor"
-              value={(distribution.wallLossFactor || 0) * 100}
-              unit="%"
-              testId="metric-wall-loss"
-            />
-            <MetricBadge
-              icon={Flame}
-              label="High-Energy Fraction"
-              value={distribution.highEnergyFraction * 100}
-              unit="%"
-              testId="metric-high-energy-fraction"
-            />
-            <MetricBadge
-              icon={Clock}
-              label="Residence Time Index"
-              value={distribution.residenceTimeIndex}
-              unit="ms"
-              testId="metric-residence-time"
-            />
+          <div className="space-y-2 pt-2">
+            <p className="text-xs font-medium text-muted-foreground">Overall Chamber Metrics</p>
+            <div className="grid grid-cols-2 lg:grid-cols-3 gap-2" data-testid="chamber-3d-metrics">
+              <MetricBadge
+                icon={Target}
+                label="Overall Center/Edge"
+                value={distribution.centerEdgeRatio}
+                unit=""
+                testId="metric-center-edge-ratio"
+              />
+              <MetricBadge
+                icon={ArrowDownUp}
+                label="Top/Bottom Gradient"
+                value={distribution.topBottomGradient}
+                unit=""
+                testId="metric-top-bottom-gradient"
+              />
+              <MetricBadge
+                icon={Layers}
+                label="3D Uniformity"
+                value={distribution.verticalUniformity || 0}
+                unit="%"
+                testId="metric-vertical-uniformity"
+              />
+              <MetricBadge
+                icon={Waves}
+                label="Wall Loss Factor"
+                value={(distribution.wallLossFactor || 0) * 100}
+                unit="%"
+                testId="metric-wall-loss"
+              />
+              <MetricBadge
+                icon={Flame}
+                label="High-Energy Fraction"
+                value={distribution.highEnergyFraction * 100}
+                unit="%"
+                testId="metric-high-energy-fraction"
+              />
+              <MetricBadge
+                icon={Clock}
+                label="Residence Time Index"
+                value={distribution.residenceTimeIndex}
+                unit="ms"
+                testId="metric-residence-time"
+              />
+            </div>
           </div>
         )}
       </CardContent>
