@@ -3,9 +3,19 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Slider } from "@/components/ui/slider";
 import { Label } from "@/components/ui/label";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import type { RadicalDistribution } from "@shared/schema";
-import { Atom, Box, Layers, ArrowDownUp, Target, Flame, Clock, Waves } from "lucide-react";
+import { Atom, Box, Layers, ArrowDownUp, Target, Flame, Clock, Waves, Info, X } from "lucide-react";
 import Plot from "react-plotly.js";
+
+interface PointInfo {
+  x: number;
+  y: number;
+  z: number;
+  density: number;
+  temperature: number;
+  wallDistance: number;
+}
 
 interface Chamber3DProps {
   distribution: RadicalDistribution | null;
@@ -38,10 +48,11 @@ function MetricBadge({
   );
 }
 
-function Chamber3DVisualization({ distribution, selectedZ, onZChange }: { 
+function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointClick }: { 
   distribution: RadicalDistribution; 
   selectedZ: number;
   onZChange: (z: number) => void;
+  onPointClick: (info: PointInfo) => void;
 }) {
   const plotData = useMemo(() => {
     const grid3D = distribution.grid3D;
@@ -82,9 +93,9 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
   const minVal = Math.min(...values);
   const maxVal = Math.max(...values);
 
-  const isoData: Plotly.Data[] = [
+  const isoData = [
     {
-      type: "isosurface" as const,
+      type: "isosurface",
       x: plotData.x,
       y: plotData.y,
       z: plotData.z,
@@ -103,7 +114,7 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
       ],
       showscale: true,
       colorbar: {
-        title: "Density",
+        title: { text: "Density" },
         thickness: 15,
         len: 0.7,
         x: 1.02,
@@ -115,8 +126,8 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
         y: { show: false },
         z: { show: false },
       },
-    } as Plotly.Data,
-  ];
+    },
+  ] as Plotly.Data[];
 
   const layout: Partial<Plotly.Layout> = {
     autosize: true,
@@ -125,9 +136,8 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
     plot_bgcolor: "transparent",
     scene: {
       xaxis: {
-        title: "X (cm)",
+        title: { text: "X (cm)" },
         tickfont: { color: "#888", size: 10 },
-        titlefont: { color: "#aaa", size: 11 },
         gridcolor: "#333",
         zerolinecolor: "#444",
         showbackground: true,
@@ -135,9 +145,8 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
         range: [-xSize / 2 - 1, xSize / 2 + 1],
       },
       yaxis: {
-        title: "Y (cm)",
+        title: { text: "Y (cm)" },
         tickfont: { color: "#888", size: 10 },
-        titlefont: { color: "#aaa", size: 11 },
         gridcolor: "#333",
         zerolinecolor: "#444",
         showbackground: true,
@@ -145,9 +154,8 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
         range: [-ySize / 2 - 1, ySize / 2 + 1],
       },
       zaxis: {
-        title: "Height (layer)",
+        title: { text: "Height (layer)" },
         tickfont: { color: "#888", size: 10 },
-        titlefont: { color: "#aaa", size: 11 },
         gridcolor: "#333",
         zerolinecolor: "#444",
         showbackground: true,
@@ -232,14 +240,28 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange }: {
               row.map((value, j) => {
                 const normalized = (value - Math.min(...sliceData.flat())) / 
                   (Math.max(...sliceData.flat()) - Math.min(...sliceData.flat()));
+                const xCoord = j - sliceData[0].length / 2;
+                const yCoord = i - sliceData.length / 2;
+                const wallDist = Math.min(
+                  j, sliceData[0].length - 1 - j,
+                  i, sliceData.length - 1 - i
+                ) / (sliceData[0].length / 2);
                 return (
                   <div
                     key={`${i}-${j}`}
-                    className="aspect-square"
+                    className="aspect-square cursor-pointer hover:ring-2 hover:ring-primary transition-all"
                     style={{ 
                       backgroundColor: interpolateColor(normalized),
                     }}
-                    title={`Density: ${value.toFixed(3)}`}
+                    title={`Click for details - Density: ${value.toFixed(3)}`}
+                    onClick={() => onPointClick({
+                      x: xCoord,
+                      y: yCoord,
+                      z: selectedZ,
+                      density: value,
+                      temperature: 0.5 + normalized * 0.4,
+                      wallDistance: wallDist,
+                    })}
                     data-testid={`slice-cell-${i}-${j}`}
                   />
                 );
@@ -304,15 +326,83 @@ function LoadingState() {
   );
 }
 
+function PointInfoDialog({ 
+  point, 
+  isOpen, 
+  onClose 
+}: { 
+  point: PointInfo | null; 
+  isOpen: boolean; 
+  onClose: () => void;
+}) {
+  if (!point) return null;
+
+  const densityPercent = (point.density * 100).toFixed(1);
+  const tempCelsius = (point.temperature * 400 + 100).toFixed(0);
+
+  return (
+    <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-w-sm" data-testid="dialog-point-info">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Info className="h-5 w-5 text-primary" />
+            Point Details
+          </DialogTitle>
+          <DialogDescription>
+            Coordinates: ({point.x}, {point.y}, {point.z})
+          </DialogDescription>
+        </DialogHeader>
+        <div className="grid grid-cols-2 gap-4 py-4">
+          <div className="space-y-1 p-3 rounded-md bg-muted/50" data-testid="info-density">
+            <p className="text-xs text-muted-foreground">Radical Density</p>
+            <p className="text-lg font-bold font-mono text-blue-500">{densityPercent}%</p>
+          </div>
+          <div className="space-y-1 p-3 rounded-md bg-muted/50" data-testid="info-temperature">
+            <p className="text-xs text-muted-foreground">Est. Temperature</p>
+            <p className="text-lg font-bold font-mono text-orange-500">{tempCelsius}°C</p>
+          </div>
+          <div className="space-y-1 p-3 rounded-md bg-muted/50" data-testid="info-wall-distance">
+            <p className="text-xs text-muted-foreground">Wall Distance</p>
+            <p className="text-lg font-bold font-mono">{(point.wallDistance * 100).toFixed(0)}%</p>
+          </div>
+          <div className="space-y-1 p-3 rounded-md bg-muted/50" data-testid="info-height">
+            <p className="text-xs text-muted-foreground">Height Layer</p>
+            <p className="text-lg font-bold font-mono">{point.z}/9</p>
+          </div>
+        </div>
+        <div className="text-xs text-muted-foreground border-t pt-3">
+          <p>Click on any cell in the 2D slice to inspect its properties.</p>
+        </div>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 export function Chamber3D({ distribution, isLoading }: Chamber3DProps) {
   const [selectedZ, setSelectedZ] = useState(5);
+  const [selectedPoint, setSelectedPoint] = useState<PointInfo | null>(null);
+  const [isDialogOpen, setIsDialogOpen] = useState(false);
 
   const handleZChange = useCallback((z: number) => {
     setSelectedZ(z);
   }, []);
 
+  const handlePointClick = useCallback((info: PointInfo) => {
+    setSelectedPoint(info);
+    setIsDialogOpen(true);
+  }, []);
+
+  const handleDialogClose = useCallback(() => {
+    setIsDialogOpen(false);
+  }, []);
+
   return (
     <Card className="h-full">
+      <PointInfoDialog 
+        point={selectedPoint} 
+        isOpen={isDialogOpen} 
+        onClose={handleDialogClose} 
+      />
       <CardHeader className="pb-4">
         <div className="flex items-center justify-between gap-2 flex-wrap">
           <div>
@@ -339,6 +429,7 @@ export function Chamber3D({ distribution, isLoading }: Chamber3DProps) {
             distribution={distribution} 
             selectedZ={selectedZ}
             onZChange={handleZChange}
+            onPointClick={handlePointClick}
           />
         ) : (
           <EmptyState />

@@ -10,6 +10,22 @@ interface ProcessParameters {
   pulseEnabled: boolean;
   pulseFrequency?: number;
   pulseDutyCycle?: number;
+  chamberRfHours?: number;
+}
+
+interface RoiMetrics {
+  estimatedBatchProfit: number;
+  potentialLossReduction: number;
+  waferCost: number;
+  batchSize: number;
+  yieldRate: number;
+}
+
+interface StabilityDataPoint {
+  time: number;
+  radicalDensity: number;
+  uniformity: number;
+  temperature: number;
 }
 
 interface RadicalDistribution {
@@ -45,6 +61,8 @@ interface PredictionResult {
   parameters: ProcessParameters;
   radicalDistribution: RadicalDistribution;
   qualityMetrics: QualityMetrics;
+  roiMetrics?: RoiMetrics;
+  stabilityTimeSeries?: StabilityDataPoint[];
   status: "safe" | "warning" | "danger";
   recommendations?: ParameterRecommendation[];
 }
@@ -72,13 +90,17 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
   const o2Flow = params.gasFlowO2 / 50;
   const arFlow = params.gasFlowAr / 100;
   
+  const rfHours = params.chamberRfHours || 0;
+  const agingFactor = 1 + (rfHours / 500) * 0.5;
+  const agingEdgePenalty = 1 - (rfHours / 500) * 0.3;
+  
   const baseGeneration = powerFactor * (1 + cf4Flow * 0.5) * (1 - pressureFactor * 0.3);
   
   const pulseModulation = params.pulseEnabled 
     ? (params.pulseDutyCycle || 50) / 100 * (1 + Math.log10((params.pulseFrequency || 1000) / 1000) * 0.1)
     : 1;
   
-  const wallLossCoeff = 0.3 + (1 - pressureFactor) * 0.2;
+  const wallLossCoeff = (0.3 + (1 - pressureFactor) * 0.2) * agingFactor;
   const injectionDecayRate = 0.2 + (1 - pressureFactor) * 0.5 + arFlow * 0.15;
   
   for (let k = 0; k < gridZ; k++) {
@@ -101,7 +123,7 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
         const radialDecay = 0.2 + (1 - pressureFactor) * 0.3 + powerFactor * 0.2;
         const radialProfile = Math.exp(-r * r * radialDecay);
         const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * 0.6 * (1 + 0.2 * (1 - z)));
-        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2));
+        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2)) * agingEdgePenalty;
         
         let density = baseGeneration * pulseModulation;
         density *= radialProfile * heightDiffusion * waferLoss * rfCouplingProfile * wallLoss;
@@ -359,10 +381,109 @@ function generateRecommendations(
   return recommendations.slice(0, 3);
 }
 
+function generateStabilityTimeSeries(
+  params: ProcessParameters,
+  distribution: RadicalDistribution,
+  metrics: QualityMetrics
+): StabilityDataPoint[] {
+  const dataPoints: StabilityDataPoint[] = [];
+  const processTime = params.processTime;
+  const numPoints = Math.min(60, Math.floor(processTime / 5) + 1);
+  
+  const baseUniformity = metrics.etchUniformity;
+  const baseDensity = distribution.grid3D[5][10][10];
+  
+  const rfHours = params.chamberRfHours || 0;
+  const agingInstability = (rfHours / 500) * 0.15;
+  const pulseStability = params.pulseEnabled ? 0.98 : 0.85;
+  
+  for (let i = 0; i < numPoints; i++) {
+    const time = (i / (numPoints - 1)) * processTime;
+    const t = time / processTime;
+    
+    let densityMultiplier = 1;
+    let uniformityDelta = 0;
+    let temperature = 0.5;
+    
+    if (t < 0.1) {
+      densityMultiplier = 1 - Math.exp(-t * 30);
+      uniformityDelta = -5 * (1 - densityMultiplier);
+      temperature = 0.3 + 0.4 * t / 0.1;
+    } else if (t < 0.8) {
+      const driftPhase = (t - 0.1) / 0.7;
+      densityMultiplier = 1 + agingInstability * Math.sin(driftPhase * Math.PI);
+      uniformityDelta = -agingInstability * 10 * Math.sin(driftPhase * Math.PI * 2);
+      temperature = 0.7 + 0.2 * driftPhase;
+    } else {
+      densityMultiplier = 1 + agingInstability * 0.3;
+      uniformityDelta = -agingInstability * 3;
+      temperature = 0.85 + 0.1 * ((t - 0.8) / 0.2);
+    }
+    
+    densityMultiplier *= pulseStability;
+    const noise = (Math.random() - 0.5) * 0.02 * (1 + agingInstability);
+    
+    dataPoints.push({
+      time: Number(time.toFixed(1)),
+      radicalDensity: Number((baseDensity * densityMultiplier * (1 + noise)).toFixed(4)),
+      uniformity: Number(Math.max(50, Math.min(100, baseUniformity + uniformityDelta + noise * 10)).toFixed(1)),
+      temperature: Number(Math.min(1, Math.max(0, temperature + noise * 0.1)).toFixed(3)),
+    });
+  }
+  
+  return dataPoints;
+}
+
+function calculateRoiMetrics(
+  params: ProcessParameters,
+  metrics: QualityMetrics,
+  status: "safe" | "warning" | "danger"
+): RoiMetrics {
+  const waferCost = 150;
+  const batchSize = 25;
+  const baseSellingPrice = 200;
+  
+  let yieldRate = metrics.etchUniformity * 0.8;
+  
+  if (metrics.defectRisk === "medium") {
+    yieldRate -= 10;
+  } else if (metrics.defectRisk === "high") {
+    yieldRate -= 25;
+  }
+  
+  yieldRate -= Math.abs(metrics.cdShift) * 2;
+  yieldRate = Math.max(30, Math.min(99, yieldRate));
+  
+  const goodWafers = Math.floor(batchSize * yieldRate / 100);
+  const scrappedWafers = batchSize - goodWafers;
+  const revenue = goodWafers * baseSellingPrice;
+  const materialCost = batchSize * waferCost;
+  const scrapLoss = scrappedWafers * waferCost * 0.5;
+  const estimatedBatchProfit = revenue - materialCost - scrapLoss;
+  
+  const optimalYield = 98;
+  const optimalProfit = Math.floor(batchSize * optimalYield / 100) * baseSellingPrice - batchSize * waferCost;
+  const potentialLossReduction = status === "danger" 
+    ? optimalProfit - estimatedBatchProfit
+    : status === "warning"
+    ? (optimalProfit - estimatedBatchProfit) * 0.5
+    : 0;
+  
+  return {
+    estimatedBatchProfit: Number(estimatedBatchProfit.toFixed(0)),
+    potentialLossReduction: Number(potentialLossReduction.toFixed(0)),
+    waferCost,
+    batchSize,
+    yieldRate: Number(yieldRate.toFixed(1)),
+  };
+}
+
 function generatePrediction(params: ProcessParameters): PredictionResult {
   const radicalDistribution = simulateRadicalDistribution(params);
   const { metrics, status } = predictQualityMetrics(params, radicalDistribution);
   const recommendations = generateRecommendations(params, radicalDistribution, metrics, status);
+  const roiMetrics = calculateRoiMetrics(params, metrics, status);
+  const stabilityTimeSeries = generateStabilityTimeSeries(params, radicalDistribution, metrics);
   
   return {
     id: generateUUID(),
@@ -370,6 +491,8 @@ function generatePrediction(params: ProcessParameters): PredictionResult {
     parameters: params,
     radicalDistribution,
     qualityMetrics: metrics,
+    roiMetrics,
+    stabilityTimeSeries,
     status,
     recommendations: recommendations.length > 0 ? recommendations : undefined,
   };

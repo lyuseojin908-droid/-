@@ -1,4 +1,4 @@
-import { type User, type InsertUser, type PredictionResult, type ProcessParameters, type RadicalDistribution, type QualityMetrics, type ParameterRecommendation } from "@shared/schema";
+import { type User, type InsertUser, type PredictionResult, type ProcessParameters, type RadicalDistribution, type QualityMetrics, type ParameterRecommendation, type RoiMetrics, type StabilityDataPoint } from "@shared/schema";
 import { randomUUID } from "crypto";
 
 export interface IStorage {
@@ -14,7 +14,7 @@ export interface IStorage {
 }
 
 // Physics-based 3D plasma simulation for radical distribution
-// Implements height-dependent gas diffusion and wall loss physics
+// Implements height-dependent gas diffusion, wall loss physics, and chamber aging effects
 function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribution {
   const gridX = 20; // Width
   const gridY = 20; // Depth
@@ -29,6 +29,13 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
   const o2Flow = params.gasFlowO2 / 50;
   const arFlow = params.gasFlowAr / 100;
   
+  // Chamber aging factor (RF Hours affect wall condition)
+  // As RF hours increase, wall recombination coefficient increases
+  // γ_aged = γ_0 * (1 + k * RF_hours), where k is aging coefficient
+  const rfHours = params.chamberRfHours || 0;
+  const agingFactor = 1 + (rfHours / 500) * 0.5; // Up to 50% increase in wall loss at 500 hrs
+  const agingEdgePenalty = 1 - (rfHours / 500) * 0.3; // Edge density reduced by up to 30%
+  
   // Calculate base radical generation rate
   const baseGeneration = powerFactor * (1 + cf4Flow * 0.5) * (1 - pressureFactor * 0.3);
   
@@ -41,9 +48,9 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
   // Gas diffusion coefficient (normalized): D = D0 * (P/P0)^(-1) * (T/T0)^(3/2)
   const diffusionCoeff = 0.5 / pressureFactor; // Higher at lower pressure
   
-  // Wall loss coefficient: γ = γ0 * exp(-E_a / kT) 
-  // Simplified: increases with distance from center and height
-  const wallLossCoeff = 0.3 + (1 - pressureFactor) * 0.2;
+  // Wall loss coefficient: γ = γ0 * exp(-E_a / kT) * aging_factor
+  // Simplified: increases with distance from center, height, and chamber age
+  const wallLossCoeff = (0.3 + (1 - pressureFactor) * 0.2) * agingFactor;
   
   // Showerhead injection profile (gas comes from top)
   // z = 0 is bottom (wafer), z = 1 is top (showerhead)
@@ -86,7 +93,8 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
         const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * 0.6 * (1 + 0.2 * (1 - z)));
         
         // Pressure-dependent edge enhancement (stronger at higher pressure)
-        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2));
+        // Reduced by chamber aging (older chambers have worse edge performance)
+        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2)) * agingEdgePenalty;
         
         // Combine all 3D physics effects
         let density = baseGeneration * pulseModulation;
@@ -382,10 +390,136 @@ function generateRecommendations(
   return recommendations.slice(0, 3);
 }
 
+// Generate time-series stability data for the process duration
+function generateStabilityTimeSeries(
+  params: ProcessParameters,
+  distribution: RadicalDistribution,
+  metrics: QualityMetrics
+): StabilityDataPoint[] {
+  const dataPoints: StabilityDataPoint[] = [];
+  const processTime = params.processTime;
+  const numPoints = Math.min(60, Math.floor(processTime / 5) + 1); // Max 60 points
+  
+  // Base values from the steady-state prediction
+  const baseUniformity = metrics.etchUniformity;
+  const baseDensity = distribution.grid3D[5][10][10]; // Center point at mid-height
+  
+  // Chamber aging affects stability
+  const rfHours = params.chamberRfHours || 0;
+  const agingInstability = (rfHours / 500) * 0.15; // More drift with older chambers
+  
+  // Process stability factors
+  const pulseStability = params.pulseEnabled ? 0.98 : 0.85; // Pulse mode more stable
+  const pressureStability = Math.min(1, params.pressure / 30); // Higher pressure = more stable
+  
+  for (let i = 0; i < numPoints; i++) {
+    const time = (i / (numPoints - 1)) * processTime;
+    const t = time / processTime; // Normalized time 0-1
+    
+    // Time-dependent physics:
+    // 1. Ramp-up phase (0-10%): density increases exponentially to steady state
+    // 2. Steady state (10-80%): slight drift due to chamber heating
+    // 3. Stabilization (80-100%): thermal equilibrium achieved
+    
+    let densityMultiplier = 1;
+    let uniformityDelta = 0;
+    let temperature = 0.5; // Normalized temperature
+    
+    if (t < 0.1) {
+      // Ramp-up: exponential approach to steady state
+      densityMultiplier = 1 - Math.exp(-t * 30);
+      uniformityDelta = -5 * (1 - densityMultiplier); // Lower uniformity during ramp
+      temperature = 0.3 + 0.4 * t / 0.1;
+    } else if (t < 0.8) {
+      // Steady state with slight thermal drift
+      const driftPhase = (t - 0.1) / 0.7;
+      densityMultiplier = 1 + agingInstability * Math.sin(driftPhase * Math.PI);
+      uniformityDelta = -agingInstability * 10 * Math.sin(driftPhase * Math.PI * 2);
+      temperature = 0.7 + 0.2 * driftPhase;
+    } else {
+      // Stabilization phase
+      densityMultiplier = 1 + agingInstability * 0.3;
+      uniformityDelta = -agingInstability * 3;
+      temperature = 0.85 + 0.1 * ((t - 0.8) / 0.2);
+    }
+    
+    // Apply stability factors
+    densityMultiplier *= pulseStability;
+    
+    // Add controlled noise
+    const noise = (Math.random() - 0.5) * 0.02 * (1 + agingInstability);
+    
+    dataPoints.push({
+      time: Number(time.toFixed(1)),
+      radicalDensity: Number((baseDensity * densityMultiplier * (1 + noise)).toFixed(4)),
+      uniformity: Number(Math.max(50, Math.min(100, baseUniformity + uniformityDelta + noise * 10)).toFixed(1)),
+      temperature: Number(Math.min(1, Math.max(0, temperature + noise * 0.1)).toFixed(3)),
+    });
+  }
+  
+  return dataPoints;
+}
+
+// Calculate ROI metrics based on quality prediction
+function calculateRoiMetrics(
+  params: ProcessParameters,
+  metrics: QualityMetrics,
+  status: "safe" | "warning" | "danger"
+): RoiMetrics {
+  // Industry-standard cost assumptions
+  const waferCost = 150; // USD per wafer (300mm wafer)
+  const batchSize = 25; // wafers per batch
+  const baseSellingPrice = 200; // USD per processed wafer
+  
+  // Yield calculation based on quality metrics
+  // Yield = f(uniformity, defect risk, CD shift)
+  let yieldRate = metrics.etchUniformity * 0.8; // Base yield from uniformity
+  
+  // Defect risk penalty
+  if (metrics.defectRisk === "medium") {
+    yieldRate -= 10;
+  } else if (metrics.defectRisk === "high") {
+    yieldRate -= 25;
+  }
+  
+  // CD shift penalty
+  yieldRate -= Math.abs(metrics.cdShift) * 2;
+  
+  // Clamp yield
+  yieldRate = Math.max(30, Math.min(99, yieldRate));
+  
+  // Calculate batch profit
+  const goodWafers = Math.floor(batchSize * yieldRate / 100);
+  const scrappedWafers = batchSize - goodWafers;
+  const revenue = goodWafers * baseSellingPrice;
+  const materialCost = batchSize * waferCost;
+  const scrapLoss = scrappedWafers * waferCost * 0.5; // Partial recovery
+  const estimatedBatchProfit = revenue - materialCost - scrapLoss;
+  
+  // Calculate potential loss reduction (compared to optimal scenario)
+  const optimalYield = 98;
+  const optimalProfit = Math.floor(batchSize * optimalYield / 100) * baseSellingPrice - batchSize * waferCost;
+  const potentialLossReduction = status === "danger" 
+    ? optimalProfit - estimatedBatchProfit
+    : status === "warning"
+    ? (optimalProfit - estimatedBatchProfit) * 0.5
+    : 0;
+  
+  return {
+    estimatedBatchProfit: Number(estimatedBatchProfit.toFixed(0)),
+    potentialLossReduction: Number(potentialLossReduction.toFixed(0)),
+    waferCost,
+    batchSize,
+    yieldRate: Number(yieldRate.toFixed(1)),
+  };
+}
+
 export function generatePrediction(params: ProcessParameters): PredictionResult {
   const radicalDistribution = simulateRadicalDistribution(params);
   const { metrics, status } = predictQualityMetrics(params, radicalDistribution);
   const recommendations = generateRecommendations(params, radicalDistribution, metrics, status);
+  const roiMetrics = calculateRoiMetrics(params, metrics, status);
+  const stabilityTimeSeries = generateStabilityTimeSeries(params, radicalDistribution, metrics);
   
   return {
     id: randomUUID(),
@@ -393,6 +527,8 @@ export function generatePrediction(params: ProcessParameters): PredictionResult 
     parameters: params,
     radicalDistribution,
     qualityMetrics: metrics,
+    roiMetrics,
+    stabilityTimeSeries,
     status,
     recommendations: recommendations.length > 0 ? recommendations : undefined,
   };

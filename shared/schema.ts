@@ -28,6 +28,7 @@ export const processParametersSchema = z.object({
   pulseDutyCycle: z.number().min(10).max(90).optional(), // percentage
   pulseFrequency: z.number().min(100).max(10000).optional(), // Hz
   processTime: z.number().min(10).max(600), // seconds
+  chamberRfHours: z.number().min(0).max(500).optional(), // Chamber aging: RF hours
 });
 
 export type ProcessParameters = z.infer<typeof processParametersSchema>;
@@ -59,6 +60,27 @@ export const qualityMetricsSchema = z.object({
   defectRiskScore: z.number().min(0).max(100),
 });
 
+// ROI Metrics (Economic Indicators)
+export const roiMetricsSchema = z.object({
+  estimatedBatchProfit: z.number(), // USD
+  potentialLossReduction: z.number(), // USD
+  waferCost: z.number(), // USD per wafer
+  batchSize: z.number(), // wafers per batch
+  yieldRate: z.number().min(0).max(100), // percentage
+});
+
+export type RoiMetrics = z.infer<typeof roiMetricsSchema>;
+
+// Time-series stability data point
+export const stabilityDataPointSchema = z.object({
+  time: z.number(), // seconds from process start
+  radicalDensity: z.number(), // normalized density
+  uniformity: z.number(), // percentage
+  temperature: z.number(), // estimated temperature (normalized)
+});
+
+export type StabilityDataPoint = z.infer<typeof stabilityDataPointSchema>;
+
 export type QualityMetrics = z.infer<typeof qualityMetricsSchema>;
 
 // Parameter Adjustment Recommendation
@@ -79,6 +101,8 @@ export const predictionResultSchema = z.object({
   parameters: processParametersSchema,
   radicalDistribution: radicalDistributionSchema,
   qualityMetrics: qualityMetricsSchema,
+  roiMetrics: roiMetricsSchema.optional(),
+  stabilityTimeSeries: z.array(stabilityDataPointSchema).optional(),
   status: z.enum(["safe", "warning", "danger"]),
   recommendations: z.array(parameterRecommendationSchema).optional(),
 });

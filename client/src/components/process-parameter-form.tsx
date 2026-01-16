@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Slider } from "@/components/ui/slider";
-import { Zap, Gauge, Wind, Timer, Activity, Play } from "lucide-react";
+import { Zap, Gauge, Wind, Timer, Activity, Play, Wrench } from "lucide-react";
 
 interface ProcessParameterFormProps {
   onSubmit: (data: ProcessParameters) => void;
@@ -27,6 +27,7 @@ export function ProcessParameterForm({ onSubmit, isLoading }: ProcessParameterFo
       pulseDutyCycle: 50,
       pulseFrequency: 1000,
       processTime: 120,
+      chamberRfHours: 0,
     },
   });
 
@@ -262,6 +263,37 @@ export function ProcessParameterForm({ onSubmit, isLoading }: ProcessParameterFo
                         <span>10s</span>
                         <span className="font-mono font-medium text-foreground">{field.value}s</span>
                         <span>600s</span>
+                      </div>
+                    </div>
+                  </FormControl>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
+            <FormField
+              control={form.control}
+              name="chamberRfHours"
+              render={({ field }) => (
+                <FormItem>
+                  <FormLabel className="flex items-center gap-2 text-muted-foreground">
+                    <Wrench className="h-4 w-4" />
+                    Chamber Condition (RF Hours)
+                  </FormLabel>
+                  <FormControl>
+                    <div className="space-y-2">
+                      <Slider
+                        min={0}
+                        max={500}
+                        step={10}
+                        value={[field.value ?? 0]}
+                        onValueChange={(v) => field.onChange(v[0])}
+                        data-testid="slider-rf-hours"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span className="text-green-500">0h (New)</span>
+                        <span className="font-mono font-medium text-foreground">{field.value ?? 0}h</span>
+                        <span className="text-red-500">500h (Aged)</span>
                       </div>
                     </div>
                   </FormControl>

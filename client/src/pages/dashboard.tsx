@@ -5,6 +5,8 @@ import { Chamber3D } from "@/components/chamber-3d";
 import { QualityMetricsCards } from "@/components/quality-metrics-cards";
 import { PredictionHistory } from "@/components/prediction-history";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
+import { RoiMetricsPanel } from "@/components/roi-metrics-panel";
+import { RadicalStabilityGraph } from "@/components/radical-stability-graph";
 import { SEO } from "@/components/seo";
 import { apiRequest } from "@/lib/queryClient";
 import type { ProcessParameters, PredictionResult } from "@shared/schema";
@@ -117,11 +119,22 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Right Column - Metrics and Recommendations */}
+          {/* Right Column - Metrics, ROI, and Recommendations */}
           <div className="xl:col-span-4 space-y-6">
             <QualityMetricsCards
               metrics={currentPrediction?.qualityMetrics ?? null}
               status={currentPrediction?.status ?? null}
+              isLoading={predictionMutation.isPending}
+            />
+            <RoiMetricsPanel
+              roiMetrics={currentPrediction?.roiMetrics}
+              status={currentPrediction?.status ?? null}
+              isLoading={predictionMutation.isPending}
+            />
+            <RadicalStabilityGraph
+              stabilityData={currentPrediction?.stabilityTimeSeries}
+              status={currentPrediction?.status ?? null}
+              processTime={currentPrediction?.parameters?.processTime ?? 120}
               isLoading={predictionMutation.isPending}
             />
             {currentPrediction && (
