@@ -79,7 +79,7 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
     : 1;
   
   const wallLossCoeff = 0.3 + (1 - pressureFactor) * 0.2;
-  const injectionDecayRate = 0.8 + arFlow * 0.3;
+  const injectionDecayRate = 0.2 + (1 - pressureFactor) * 0.5 + arFlow * 0.15;
   
   for (let k = 0; k < gridZ; k++) {
     const zLayer: number[][] = [];
@@ -98,10 +98,10 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
         const r = Math.sqrt(x * x + y * y);
         const rWall = Math.max(Math.abs(x), Math.abs(y));
         
-        const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
+        const radialDecay = 0.2 + (1 - pressureFactor) * 0.3 + powerFactor * 0.2;
         const radialProfile = Math.exp(-r * r * radialDecay);
-        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * (1 + 0.3 * (1 - z)));
-        const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
+        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * 0.6 * (1 + 0.2 * (1 - z)));
+        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2));
         
         let density = baseGeneration * pulseModulation;
         density *= radialProfile * heightDiffusion * waferLoss * rfCouplingProfile * wallLoss;

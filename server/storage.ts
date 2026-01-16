@@ -47,7 +47,8 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
   
   // Showerhead injection profile (gas comes from top)
   // z = 0 is bottom (wafer), z = 1 is top (showerhead)
-  const injectionDecayRate = 0.8 + arFlow * 0.3; // Ar affects vertical distribution
+  // Tuned for realistic vertical uniformity with higher pressure
+  const injectionDecayRate = 0.2 + (1 - pressureFactor) * 0.5 + arFlow * 0.15; // Higher pressure = more uniform
   
   // Generate 3D distribution [z][y][x]
   for (let k = 0; k < gridZ; k++) {
@@ -75,16 +76,17 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
         const rWall = Math.max(Math.abs(x), Math.abs(y)); // Distance to nearest wall
         
         // Radial decay from center (plasma diffusion)
-        const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
+        // Tuned for realistic SAFE/DANGER conditions in 3D
+        const radialDecay = 0.2 + (1 - pressureFactor) * 0.3 + powerFactor * 0.2;
         const radialProfile = Math.exp(-r * r * radialDecay);
         
         // Wall loss physics: exponential loss near chamber walls
         // Loss rate: Γ_wall = γ * n * v_thermal / 4
-        const wallDistance = 1 - rWall;
-        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * (1 + 0.3 * (1 - z)));
+        // Tuned for better uniformity at higher pressure
+        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * 0.6 * (1 + 0.2 * (1 - z)));
         
-        // Pressure-dependent edge enhancement
-        const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
+        // Pressure-dependent edge enhancement (stronger at higher pressure)
+        const pressureEdgeBoost = pressureFactor * 0.25 * (1 - Math.exp(-r * r * 2));
         
         // Combine all 3D physics effects
         let density = baseGeneration * pulseModulation;
