@@ -13,10 +13,14 @@ export interface IStorage {
   clearPredictions(): Promise<void>;
 }
 
-// Physics-based plasma simulation for radical distribution
+// Physics-based 3D plasma simulation for radical distribution
+// Implements height-dependent gas diffusion and wall loss physics
 function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribution {
-  const gridSize = 20;
-  const grid: number[][] = [];
+  const gridX = 20; // Width
+  const gridY = 20; // Depth
+  const gridZ = 10; // Height (vertical layers)
+  
+  const grid3D: number[][][] = [];
   
   // Normalize parameters
   const powerFactor = params.rfPower / 1000;
@@ -33,65 +37,122 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
     ? (params.pulseDutyCycle || 50) / 100 * (1 + Math.log10((params.pulseFrequency || 1000) / 1000) * 0.1)
     : 1;
   
-  // Generate 2D distribution with physics-based spatial variation
-  for (let i = 0; i < gridSize; i++) {
-    const row: number[] = [];
-    const y = (i - gridSize / 2) / (gridSize / 2); // -1 to 1
+  // Physics constants for 3D simulation
+  // Gas diffusion coefficient (normalized): D = D0 * (P/P0)^(-1) * (T/T0)^(3/2)
+  const diffusionCoeff = 0.5 / pressureFactor; // Higher at lower pressure
+  
+  // Wall loss coefficient: γ = γ0 * exp(-E_a / kT) 
+  // Simplified: increases with distance from center and height
+  const wallLossCoeff = 0.3 + (1 - pressureFactor) * 0.2;
+  
+  // Showerhead injection profile (gas comes from top)
+  // z = 0 is bottom (wafer), z = 1 is top (showerhead)
+  const injectionDecayRate = 0.8 + arFlow * 0.3; // Ar affects vertical distribution
+  
+  // Generate 3D distribution [z][y][x]
+  for (let k = 0; k < gridZ; k++) {
+    const zLayer: number[][] = [];
+    const z = k / (gridZ - 1); // 0 (bottom/wafer) to 1 (top/showerhead)
+    const zNorm = (k - gridZ / 2) / (gridZ / 2); // -1 to 1 for physics calc
     
-    for (let j = 0; j < gridSize; j++) {
-      const x = (j - gridSize / 2) / (gridSize / 2); // -1 to 1
-      const r = Math.sqrt(x * x + y * y);
+    // Height-dependent physics:
+    // 1. Gas diffusion from showerhead (top) - exponential decay
+    const heightDiffusion = Math.exp(-injectionDecayRate * (1 - z));
+    
+    // 2. Wall loss increases near bottom due to wafer surface reactions
+    const waferLoss = 1 - 0.15 * Math.exp(-4 * z); // More loss near wafer (z=0)
+    
+    // 3. Plasma density profile (RF coupling is stronger near center height)
+    const rfCouplingProfile = 1 + 0.2 * Math.sin(Math.PI * z); // Peak at z=0.5
+    
+    for (let i = 0; i < gridY; i++) {
+      const row: number[] = [];
+      const y = (i - gridY / 2) / (gridY / 2); // -1 to 1
       
-      // Radial decay from center (due to wall losses and diffusion)
-      // Higher pressure improves diffusion and creates more uniform distribution
-      // Lower power reduces center concentration
-      const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
-      const radialProfile = Math.exp(-r * r * radialDecay);
-      
-      // Pressure-dependent edge enhancement (higher pressure = better edge coverage)
-      const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
-      
-      // Vertical gradient (top-heavy due to showerhead gas injection)
-      const verticalProfile = 1 + y * 0.15 * (1 - arFlow * 0.4);
-      
-      // Edge enhancement at high power (skin effect) - reduced for better balance
-      const edgeEnhancement = powerFactor > 1.2 ? 0.1 * r * r * (powerFactor - 1.2) : 0;
-      
-      // Combine profiles
-      let density = baseGeneration * radialProfile * verticalProfile * pulseModulation;
-      density += edgeEnhancement;
-      density += pressureEdgeBoost * baseGeneration;
-      
-      // Add controlled noise for realism
-      const noise = (Math.random() - 0.5) * 0.05 * density;
-      density = Math.max(0.1, density + noise);
-      
-      row.push(Number(density.toFixed(4)));
+      for (let j = 0; j < gridX; j++) {
+        const x = (j - gridX / 2) / (gridX / 2); // -1 to 1
+        const r = Math.sqrt(x * x + y * y); // Radial distance
+        const rWall = Math.max(Math.abs(x), Math.abs(y)); // Distance to nearest wall
+        
+        // Radial decay from center (plasma diffusion)
+        const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
+        const radialProfile = Math.exp(-r * r * radialDecay);
+        
+        // Wall loss physics: exponential loss near chamber walls
+        // Loss rate: Γ_wall = γ * n * v_thermal / 4
+        const wallDistance = 1 - rWall;
+        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * (1 + 0.3 * (1 - z)));
+        
+        // Pressure-dependent edge enhancement
+        const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
+        
+        // Combine all 3D physics effects
+        let density = baseGeneration * pulseModulation;
+        density *= radialProfile * heightDiffusion * waferLoss * rfCouplingProfile * wallLoss;
+        density += pressureEdgeBoost * baseGeneration * heightDiffusion;
+        
+        // Edge enhancement at high power
+        if (powerFactor > 1.2) {
+          density += 0.1 * r * r * (powerFactor - 1.2) * heightDiffusion;
+        }
+        
+        // Add controlled noise for realism
+        const noise = (Math.random() - 0.5) * 0.03 * density;
+        density = Math.max(0.05, density + noise);
+        
+        row.push(Number(density.toFixed(4)));
+      }
+      zLayer.push(row);
     }
-    grid.push(row);
+    grid3D.push(zLayer);
   }
   
-  // Calculate derived metrics
-  const centerValue = grid[gridSize / 2]?.[gridSize / 2] || 1;
+  // Extract 2D slice at mid-height for backward compatibility
+  const midZ = Math.floor(gridZ / 2);
+  const grid2D = grid3D[midZ];
+  
+  // Calculate derived metrics from 3D data
+  // Center value at mid-height
+  const centerValue = grid3D[midZ][gridY / 2][gridX / 2];
+  
+  // Edge values at mid-height
   const edgeValues = [
-    grid[0]?.[gridSize / 2],
-    grid[gridSize - 1]?.[gridSize / 2],
-    grid[gridSize / 2]?.[0],
-    grid[gridSize / 2]?.[gridSize - 1]
-  ].filter(v => v !== undefined) as number[];
+    grid3D[midZ][0][gridX / 2],
+    grid3D[midZ][gridY - 1][gridX / 2],
+    grid3D[midZ][gridY / 2][0],
+    grid3D[midZ][gridY / 2][gridX - 1]
+  ];
   const avgEdge = edgeValues.reduce((a, b) => a + b, 0) / edgeValues.length;
   
-  const topRow = grid[0] || [];
-  const bottomRow = grid[gridSize - 1] || [];
-  const avgTop = topRow.reduce((a, b) => a + b, 0) / topRow.length;
-  const avgBottom = bottomRow.reduce((a, b) => a + b, 0) / bottomRow.length;
+  // Top/Bottom gradient (vertical uniformity)
+  const bottomLayer = grid3D[0];
+  const topLayer = grid3D[gridZ - 1];
+  const avgBottom = bottomLayer.flat().reduce((a, b) => a + b, 0) / (gridX * gridY);
+  const avgTop = topLayer.flat().reduce((a, b) => a + b, 0) / (gridX * gridY);
+  
+  // Vertical uniformity calculation
+  const allValues = grid3D.flat(2);
+  const mean3D = allValues.reduce((a, b) => a + b, 0) / allValues.length;
+  const variance3D = allValues.reduce((sum, v) => sum + (v - mean3D) ** 2, 0) / allValues.length;
+  const verticalUniformity = Number((100 - Math.sqrt(variance3D) / mean3D * 100).toFixed(1));
+  
+  // Wall loss factor calculation
+  const centerAvg = grid3D.map(layer => layer[gridY/2][gridX/2]).reduce((a, b) => a + b, 0) / gridZ;
+  const wallAvg = grid3D.map(layer => 
+    (layer[0][gridX/2] + layer[gridY-1][gridX/2] + layer[gridY/2][0] + layer[gridY/2][gridX-1]) / 4
+  ).reduce((a, b) => a + b, 0) / gridZ;
+  const wallLossFactor = Number((1 - wallAvg / centerAvg).toFixed(3));
   
   return {
-    grid,
+    grid3D,
+    grid: grid2D,
+    dimensions: { x: gridX, y: gridY, z: gridZ },
     centerEdgeRatio: Number((centerValue / avgEdge).toFixed(3)),
     topBottomGradient: Number((avgTop / avgBottom).toFixed(3)),
     highEnergyFraction: Number((0.15 + powerFactor * 0.2 - pressureFactor * 0.1).toFixed(3)),
     residenceTimeIndex: Number((10 / pressureFactor * (1 + arFlow * 0.2)).toFixed(2)),
+    verticalUniformity,
+    wallLossFactor,
   };
 }
 

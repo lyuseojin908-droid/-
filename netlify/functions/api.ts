@@ -13,11 +13,15 @@ interface ProcessParameters {
 }
 
 interface RadicalDistribution {
+  grid3D: number[][][];
   grid: number[][];
+  dimensions: { x: number; y: number; z: number };
   centerEdgeRatio: number;
   topBottomGradient: number;
   highEnergyFraction: number;
   residenceTimeIndex: number;
+  verticalUniformity: number;
+  wallLossFactor: number;
 }
 
 interface QualityMetrics {
@@ -56,8 +60,11 @@ function generateUUID(): string {
 }
 
 function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribution {
-  const gridSize = 20;
-  const grid: number[][] = [];
+  const gridX = 20;
+  const gridY = 20;
+  const gridZ = 10;
+  
+  const grid3D: number[][][] = [];
   
   const powerFactor = params.rfPower / 1000;
   const pressureFactor = params.pressure / 50;
@@ -71,52 +78,87 @@ function simulateRadicalDistribution(params: ProcessParameters): RadicalDistribu
     ? (params.pulseDutyCycle || 50) / 100 * (1 + Math.log10((params.pulseFrequency || 1000) / 1000) * 0.1)
     : 1;
   
-  for (let i = 0; i < gridSize; i++) {
-    const row: number[] = [];
-    const y = (i - gridSize / 2) / (gridSize / 2);
+  const wallLossCoeff = 0.3 + (1 - pressureFactor) * 0.2;
+  const injectionDecayRate = 0.8 + arFlow * 0.3;
+  
+  for (let k = 0; k < gridZ; k++) {
+    const zLayer: number[][] = [];
+    const z = k / (gridZ - 1);
     
-    for (let j = 0; j < gridSize; j++) {
-      const x = (j - gridSize / 2) / (gridSize / 2);
-      const r = Math.sqrt(x * x + y * y);
+    const heightDiffusion = Math.exp(-injectionDecayRate * (1 - z));
+    const waferLoss = 1 - 0.15 * Math.exp(-4 * z);
+    const rfCouplingProfile = 1 + 0.2 * Math.sin(Math.PI * z);
+    
+    for (let i = 0; i < gridY; i++) {
+      const row: number[] = [];
+      const y = (i - gridY / 2) / (gridY / 2);
       
-      const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
-      const radialProfile = Math.exp(-r * r * radialDecay);
-      const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
-      const verticalProfile = 1 + y * 0.15 * (1 - arFlow * 0.4);
-      const edgeEnhancement = powerFactor > 1.2 ? 0.1 * r * r * (powerFactor - 1.2) : 0;
-      
-      let density = baseGeneration * radialProfile * verticalProfile * pulseModulation;
-      density += edgeEnhancement;
-      density += pressureEdgeBoost * baseGeneration;
-      
-      const noise = (Math.random() - 0.5) * 0.05 * density;
-      density = Math.max(0.1, density + noise);
-      
-      row.push(Number(density.toFixed(4)));
+      for (let j = 0; j < gridX; j++) {
+        const x = (j - gridX / 2) / (gridX / 2);
+        const r = Math.sqrt(x * x + y * y);
+        const rWall = Math.max(Math.abs(x), Math.abs(y));
+        
+        const radialDecay = 0.3 + (1 - pressureFactor) * 0.5 + powerFactor * 0.3;
+        const radialProfile = Math.exp(-r * r * radialDecay);
+        const wallLoss = Math.exp(-wallLossCoeff * rWall * rWall * (1 + 0.3 * (1 - z)));
+        const pressureEdgeBoost = pressureFactor * 0.15 * (1 - Math.exp(-r * r * 2));
+        
+        let density = baseGeneration * pulseModulation;
+        density *= radialProfile * heightDiffusion * waferLoss * rfCouplingProfile * wallLoss;
+        density += pressureEdgeBoost * baseGeneration * heightDiffusion;
+        
+        if (powerFactor > 1.2) {
+          density += 0.1 * r * r * (powerFactor - 1.2) * heightDiffusion;
+        }
+        
+        const noise = (Math.random() - 0.5) * 0.03 * density;
+        density = Math.max(0.05, density + noise);
+        
+        row.push(Number(density.toFixed(4)));
+      }
+      zLayer.push(row);
     }
-    grid.push(row);
+    grid3D.push(zLayer);
   }
   
-  const centerValue = grid[gridSize / 2]?.[gridSize / 2] || 1;
+  const midZ = Math.floor(gridZ / 2);
+  const grid2D = grid3D[midZ];
+  
+  const centerValue = grid3D[midZ][gridY / 2][gridX / 2];
   const edgeValues = [
-    grid[0]?.[gridSize / 2],
-    grid[gridSize - 1]?.[gridSize / 2],
-    grid[gridSize / 2]?.[0],
-    grid[gridSize / 2]?.[gridSize - 1]
-  ].filter(v => v !== undefined) as number[];
+    grid3D[midZ][0][gridX / 2],
+    grid3D[midZ][gridY - 1][gridX / 2],
+    grid3D[midZ][gridY / 2][0],
+    grid3D[midZ][gridY / 2][gridX - 1]
+  ];
   const avgEdge = edgeValues.reduce((a, b) => a + b, 0) / edgeValues.length;
   
-  const topRow = grid[0] || [];
-  const bottomRow = grid[gridSize - 1] || [];
-  const avgTop = topRow.reduce((a, b) => a + b, 0) / topRow.length;
-  const avgBottom = bottomRow.reduce((a, b) => a + b, 0) / bottomRow.length;
+  const bottomLayer = grid3D[0];
+  const topLayer = grid3D[gridZ - 1];
+  const avgBottom = bottomLayer.flat().reduce((a, b) => a + b, 0) / (gridX * gridY);
+  const avgTop = topLayer.flat().reduce((a, b) => a + b, 0) / (gridX * gridY);
+  
+  const allValues = grid3D.flat(2);
+  const mean3D = allValues.reduce((a, b) => a + b, 0) / allValues.length;
+  const variance3D = allValues.reduce((sum, v) => sum + (v - mean3D) ** 2, 0) / allValues.length;
+  const verticalUniformity = Number((100 - Math.sqrt(variance3D) / mean3D * 100).toFixed(1));
+  
+  const centerAvg = grid3D.map(layer => layer[gridY/2][gridX/2]).reduce((a, b) => a + b, 0) / gridZ;
+  const wallAvg = grid3D.map(layer => 
+    (layer[0][gridX/2] + layer[gridY-1][gridX/2] + layer[gridY/2][0] + layer[gridY/2][gridX-1]) / 4
+  ).reduce((a, b) => a + b, 0) / gridZ;
+  const wallLossFactor = Number((1 - wallAvg / centerAvg).toFixed(3));
   
   return {
-    grid,
+    grid3D,
+    grid: grid2D,
+    dimensions: { x: gridX, y: gridY, z: gridZ },
     centerEdgeRatio: Number((centerValue / avgEdge).toFixed(3)),
     topBottomGradient: Number((avgTop / avgBottom).toFixed(3)),
     highEnergyFraction: Number((0.15 + powerFactor * 0.2 - pressureFactor * 0.1).toFixed(3)),
     residenceTimeIndex: Number((10 / pressureFactor * (1 + arFlow * 0.2)).toFixed(2)),
+    verticalUniformity,
+    wallLossFactor,
   };
 }
 

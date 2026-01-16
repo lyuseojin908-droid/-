@@ -1,7 +1,7 @@
 import { useState, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ProcessParameterForm } from "@/components/process-parameter-form";
-import { RadicalHeatmap } from "@/components/radical-heatmap";
+import { Chamber3D } from "@/components/chamber-3d";
 import { QualityMetricsCards } from "@/components/quality-metrics-cards";
 import { PredictionHistory } from "@/components/prediction-history";
 import { RecommendationsPanel } from "@/components/recommendations-panel";
@@ -109,9 +109,9 @@ export default function Dashboard() {
             </div>
           </div>
 
-          {/* Center Column - Heatmap */}
+          {/* Center Column - 3D Chamber Visualization */}
           <div className="xl:col-span-5">
-            <RadicalHeatmap
+            <Chamber3D
               distribution={currentPrediction?.radicalDistribution ?? null}
               isLoading={predictionMutation.isPending}
             />
