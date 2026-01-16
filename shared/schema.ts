@@ -53,6 +53,17 @@ export const qualityMetricsSchema = z.object({
 
 export type QualityMetrics = z.infer<typeof qualityMetricsSchema>;
 
+// Parameter Adjustment Recommendation
+export const parameterRecommendationSchema = z.object({
+  parameter: z.string(),
+  currentValue: z.number(),
+  recommendedValue: z.number(),
+  reason: z.string(),
+  priority: z.enum(["high", "medium", "low"]),
+});
+
+export type ParameterRecommendation = z.infer<typeof parameterRecommendationSchema>;
+
 // Prediction Result
 export const predictionResultSchema = z.object({
   id: z.string(),
@@ -61,6 +72,7 @@ export const predictionResultSchema = z.object({
   radicalDistribution: radicalDistributionSchema,
   qualityMetrics: qualityMetricsSchema,
   status: z.enum(["safe", "warning", "danger"]),
+  recommendations: z.array(parameterRecommendationSchema).optional(),
 });
 
 export type PredictionResult = z.infer<typeof predictionResultSchema>;

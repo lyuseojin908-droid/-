@@ -4,6 +4,7 @@ import { ProcessParameterForm } from "@/components/process-parameter-form";
 import { RadicalHeatmap } from "@/components/radical-heatmap";
 import { QualityMetricsCards } from "@/components/quality-metrics-cards";
 import { PredictionHistory } from "@/components/prediction-history";
+import { RecommendationsPanel } from "@/components/recommendations-panel";
 import { SEO } from "@/components/seo";
 import { apiRequest } from "@/lib/queryClient";
 import type { ProcessParameters, PredictionResult } from "@shared/schema";
@@ -116,13 +117,19 @@ export default function Dashboard() {
             />
           </div>
 
-          {/* Right Column - History (visible on smaller screens) */}
+          {/* Right Column - Metrics and Recommendations */}
           <div className="xl:col-span-4 space-y-6">
             <QualityMetricsCards
               metrics={currentPrediction?.qualityMetrics ?? null}
               status={currentPrediction?.status ?? null}
               isLoading={predictionMutation.isPending}
             />
+            {currentPrediction && (
+              <RecommendationsPanel
+                recommendations={currentPrediction.recommendations}
+                status={currentPrediction.status}
+              />
+            )}
             <div className="xl:hidden h-[400px]">
               <PredictionHistory
                 predictions={predictions}
