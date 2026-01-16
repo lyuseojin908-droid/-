@@ -32,13 +32,21 @@ export const processParametersSchema = z.object({
 
 export type ProcessParameters = z.infer<typeof processParametersSchema>;
 
-// Radical Distribution Data
+// Radical Distribution Data (3D Chamber Digital Twin)
 export const radicalDistributionSchema = z.object({
-  grid: z.array(z.array(z.number())), // 2D array of radical density values
+  grid3D: z.array(z.array(z.array(z.number()))), // 3D array [z][y][x] of radical density values (20x20x10)
+  grid: z.array(z.array(z.number())), // 2D slice for backward compatibility
+  dimensions: z.object({
+    x: z.number(), // Width (20)
+    y: z.number(), // Depth (20)
+    z: z.number(), // Height (10)
+  }),
   centerEdgeRatio: z.number(),
   topBottomGradient: z.number(),
   highEnergyFraction: z.number(),
   residenceTimeIndex: z.number(),
+  verticalUniformity: z.number(), // Height uniformity metric
+  wallLossFactor: z.number(), // Wall loss contribution
 });
 
 export type RadicalDistribution = z.infer<typeof radicalDistributionSchema>;
