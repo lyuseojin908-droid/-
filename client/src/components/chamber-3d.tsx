@@ -127,7 +127,7 @@ function Chamber3DVisualization({ distribution, selectedZ, onZChange, onPointCli
         z: { show: false },
       },
     },
-  ] as Plotly.Data[];
+  ] as unknown as Plotly.Data[];
 
   const layout: Partial<Plotly.Layout> = {
     autosize: true,
